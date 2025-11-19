@@ -1,5 +1,7 @@
 # ruff: noqa: E402
+import argparse
 import os
+from pathlib import Path
 
 from holmes.utils.cert_utils import add_custom_certificate
 
@@ -9,53 +11,54 @@ if add_custom_certificate(ADDITIONAL_CERTIFICATE):
 
 # DO NOT ADD ANY IMPORTS OR CODE ABOVE THIS LINE
 # IMPORTING ABOVE MIGHT INITIALIZE AN HTTPS CLIENT THAT DOESN'T TRUST THE CUSTOM CERTIFICATE
-from holmes.core import investigation
-from holmes.utils.holmes_status import update_holmes_status_in_db
-import logging
-import uvicorn
-import colorlog
-import time
 import json
+import logging
+import time
 from typing import List, Optional
 
+import colorlog
 import litellm
 import sentry_sdk
-from holmes import get_version, is_official_release
-from litellm.exceptions import AuthenticationError
+import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from holmes.utils.stream import stream_investigate_formatter, stream_chat_formatter
+from litellm.exceptions import AuthenticationError
+
+from holmes import get_version, is_official_release
 from holmes.common.env_vars import (
+    DEVELOPMENT_MODE,
+    ENABLE_TELEMETRY,
     HOLMES_HOST,
     HOLMES_PORT,
     HOLMES_POST_PROCESSING_PROMPT,
     LOG_PERFORMANCE,
     SENTRY_DSN,
-    ENABLE_TELEMETRY,
-    DEVELOPMENT_MODE,
     SENTRY_TRACES_SAMPLE_RATE,
 )
 from holmes.config import Config
+from holmes.core import investigation
 from holmes.core.conversations import (
     build_chat_messages,
     build_issue_chat_messages,
     build_workload_health_chat_messages,
 )
+from holmes.core.investigation_structured_output import clear_json_markdown
 from holmes.core.models import (
-    FollowUpAction,
-    InvestigationResult,
-    InvestigateRequest,
-    WorkloadHealthRequest,
     ChatRequest,
     ChatResponse,
+    FollowUpAction,
+    InvestigateRequest,
+    InvestigationResult,
     IssueChatRequest,
     WorkloadHealthChatRequest,
+    WorkloadHealthRequest,
     workload_health_structured_output,
 )
-from holmes.core.investigation_structured_output import clear_json_markdown
 from holmes.plugins.prompts import load_and_render_prompt
-from holmes.utils.holmes_sync_toolsets import holmes_sync_toolsets_status
 from holmes.utils.global_instructions import add_runbooks_to_user_prompt
+from holmes.utils.holmes_status import update_holmes_status_in_db
+from holmes.utils.holmes_sync_toolsets import holmes_sync_toolsets_status
+from holmes.utils.stream import stream_chat_formatter, stream_investigate_formatter
 
 
 def init_logging():
@@ -76,9 +79,26 @@ def init_logging():
     logging.info(f"logger initialized using {logging_level} log level")
 
 
+def load_config(config_file: Optional[Path] = None) -> Config:
+    """Load configuration from file or environment variables."""
+    if config_file:
+        logging.info(f"Loading config from: {config_file}")
+        return Config.load_from_file(config_file)
+
+    default_config_file = Path.home() / ".holmes" / "config.yaml"
+    if default_config_file.exists():
+        logging.info(f"Loading config from default location: {default_config_file}")
+        return Config.load_from_file(default_config_file)
+
+    logging.info("No config file found, loading from environment variables")
+    return Config.load_from_env()
+
+
 init_logging()
-config = Config.load_from_env()
-dal = config.dal
+
+# Config will be loaded in main() based on CLI args
+config: Optional[Config] = None
+dal = None
 
 
 def sync_before_server_start():
@@ -409,6 +429,18 @@ def get_model():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="HolmesGPT Server")
+    parser.add_argument(
+        "--config-file",
+        type=Path,
+        help="Path to configuration file (default: ~/.holmes/config.yaml)",
+    )
+    args = parser.parse_args()
+
+    # Load config based on CLI args
+    config = load_config(args.config_file)
+    dal = config.dal
+
     log_config = uvicorn.config.LOGGING_CONFIG
     log_config["formatters"]["access"]["fmt"] = (
         "%(asctime)s %(levelname)-8s %(message)s"
