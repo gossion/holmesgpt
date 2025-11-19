@@ -214,12 +214,34 @@ Check in pyproject.toml and NEVER use a marker/tag that doesn't exist there. Ask
 **Key Configuration Sections**:
 - `model`: LLM model to use (default: gpt-4.1)
 - `api_key`: LLM API key (or use environment variables)
+- `api_base`: API endpoint URL (for Azure OpenAI or custom endpoints)
+- `api_version`: API version (for Azure OpenAI)
 - `custom_toolsets`: Override or add toolsets
 - `custom_runbooks`: Add investigation runbooks
 - Platform-specific settings (alertmanager_url, jira_url, etc.)
 
+**Azure OpenAI Configuration**:
+
+Config file (`~/.holmes/config.yaml`):
+```yaml
+model: azure/your-deployment-name
+api_key: your-azure-api-key
+api_base: https://your-resource.openai.azure.com/
+api_version: 2024-02-15-preview
+```
+
+Or using environment variables (recommended):
+```bash
+export MODEL=azure/your-deployment-name
+export AZURE_API_KEY=your-azure-api-key
+export AZURE_API_BASE=https://your-resource.openai.azure.com/
+export AZURE_API_VERSION=2024-02-15-preview
+```
+
 **Environment Variables**:
-- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`: LLM API keys
+- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `AZURE_API_KEY`: LLM API keys
+- `AZURE_API_BASE`: Azure OpenAI endpoint URL
+- `AZURE_API_VERSION`: Azure OpenAI API version
 - `MODEL`: Override default model(s) - supports comma-separated list
 - `RUN_LIVE`: Use live tools in tests (strongly recommended)
 - `BRAINTRUST_API_KEY`: For test result tracking and CI/CD report generation
