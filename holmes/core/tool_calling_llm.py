@@ -2,13 +2,7 @@ import concurrent.futures
 import json
 import logging
 import textwrap
-from typing import Dict, List, Optional, Type, Union, Callable, Any
-
-from holmes.core.models import (
-    ToolApprovalDecision,
-    ToolCallResult,
-    PendingToolApproval,
-)
+from typing import Any, Callable, Dict, List, Optional, Type, Union
 
 import sentry_sdk
 from openai import BadRequestError
@@ -19,11 +13,10 @@ from pydantic import BaseModel, Field
 from rich.console import Console
 
 from holmes.common.env_vars import (
+    LOG_LLM_USAGE_RESPONSE,
     RESET_REPEATED_TOOL_CALL_CHECK_AFTER_COMPACTION,
     TEMPERATURE,
-    LOG_LLM_USAGE_RESPONSE,
 )
-
 from holmes.core.investigation_structured_output import (
     DEFAULT_SECTIONS,
     REQUEST_STRUCTURED_OUTPUT_FROM_LLM,
@@ -33,6 +26,11 @@ from holmes.core.investigation_structured_output import (
 )
 from holmes.core.issue import Issue
 from holmes.core.llm import LLM
+from holmes.core.models import (
+    PendingToolApproval,
+    ToolApprovalDecision,
+    ToolCallResult,
+)
 from holmes.core.resource_instruction import ResourceInstructions
 from holmes.core.runbooks import RunbookManager
 from holmes.core.safeguards import prevent_overly_repeated_tool_call
@@ -44,26 +42,26 @@ from holmes.core.tools import (
 from holmes.core.tools_utils.tool_context_window_limiter import (
     prevent_overly_big_tool_response,
 )
+from holmes.core.tools_utils.tool_executor import ToolExecutor
+from holmes.core.tracing import DummySpan
 from holmes.core.truncation.input_context_window_limiter import (
     limit_input_context_window,
 )
 from holmes.plugins.prompts import load_and_render_prompt
 from holmes.plugins.runbooks import RunbookCatalog
 from holmes.utils import sentry_helper
+from holmes.utils.colors import AI_COLOR
 from holmes.utils.global_instructions import (
     Instructions,
     add_runbooks_to_user_prompt,
 )
-from holmes.utils.tags import format_tags_in_string, parse_messages_tags
-from holmes.core.tools_utils.tool_executor import ToolExecutor
-from holmes.core.tracing import DummySpan
-from holmes.utils.colors import AI_COLOR
 from holmes.utils.stream import (
     StreamEvents,
     StreamMessage,
     add_token_count_to_metadata,
     build_stream_event_token_count,
 )
+from holmes.utils.tags import format_tags_in_string, parse_messages_tags
 
 # Create a named logger for cost tracking
 cost_logger = logging.getLogger("holmes.costs")
@@ -177,7 +175,10 @@ class ToolCallingLLM:
         ] = None
 
     def process_tool_decisions(
-        self, messages: List[Dict[str, Any]], tool_decisions: List[ToolApprovalDecision]
+        self,
+        messages: List[Dict[str, Any]],
+        tool_decisions: List[ToolApprovalDecision],
+        request_context: Optional[Dict[str, Any]] = None,
     ) -> tuple[List[Dict[str, Any]], list[StreamMessage]]:
         """
         Process tool approval decisions and execute approved tools.
@@ -234,6 +235,7 @@ class ToolCallingLLM:
                     trace_span=DummySpan(),  # TODO: replace with proper span
                     tool_number=None,
                     user_approved=True,
+                    request_context=request_context,
                 )
             else:
                 # Tool was rejected or no decision found, add rejection message
@@ -273,6 +275,7 @@ class ToolCallingLLM:
         response_format: Optional[Union[dict, Type[BaseModel]]] = None,
         sections: Optional[InputSectionsDataType] = None,
         trace_span=DummySpan(),
+        request_context: Optional[Dict[str, Any]] = None,
     ) -> LLMResult:
         messages = [
             {"role": "system", "content": system_prompt},
@@ -285,6 +288,7 @@ class ToolCallingLLM:
             user_prompt=user_prompt,
             sections=sections,
             trace_span=trace_span,
+            request_context=request_context,
         )
 
     def messages_call(
@@ -293,9 +297,14 @@ class ToolCallingLLM:
         post_process_prompt: Optional[str] = None,
         response_format: Optional[Union[dict, Type[BaseModel]]] = None,
         trace_span=DummySpan(),
+        request_context: Optional[Dict[str, Any]] = None,
     ) -> LLMResult:
         return self.call(
-            messages, post_process_prompt, response_format, trace_span=trace_span
+            messages,
+            post_process_prompt,
+            response_format,
+            trace_span=trace_span,
+            request_context=request_context,
         )
 
     @sentry_sdk.trace
@@ -308,6 +317,7 @@ class ToolCallingLLM:
         sections: Optional[InputSectionsDataType] = None,
         trace_span=DummySpan(),
         tool_number_offset: int = 0,
+        request_context: Optional[Dict[str, Any]] = None,
     ) -> LLMResult:
         tool_calls: list[
             dict
@@ -467,6 +477,7 @@ class ToolCallingLLM:
                         previous_tool_calls=tool_calls,
                         trace_span=trace_span,
                         tool_number=tool_number,
+                        request_context=request_context,
                     )
                     futures_tool_numbers[future] = tool_number
                     futures.append(future)
@@ -488,6 +499,7 @@ class ToolCallingLLM:
                             tool_call_result = self._handle_tool_call_approval(
                                 tool_call_result=tool_call_result,
                                 tool_number=tool_number,
+                                request_context=request_context,
                             )
                             ToolCallingLLM._log_tool_call_result(
                                 tool_span, tool_call_result
@@ -516,6 +528,7 @@ class ToolCallingLLM:
         tool_params: dict,
         user_approved: bool,
         tool_number: Optional[int] = None,
+        request_context: Optional[Dict[str, Any]] = None,
     ) -> StructuredToolResult:
         tool = self.tool_executor.get_tool_by_name(tool_name)
         if not tool:
@@ -534,6 +547,7 @@ class ToolCallingLLM:
                 user_approved=user_approved,
                 llm=self.llm,
                 max_token_count=self.llm.get_max_token_count_for_single_tool(),
+                request_context=request_context,
             )
             tool_response = tool.invoke(tool_params, context=invoke_context)
         except Exception as e:
@@ -555,6 +569,7 @@ class ToolCallingLLM:
         user_approved: bool,
         previous_tool_calls: list[dict],
         tool_number: Optional[int] = None,
+        request_context: Optional[Dict[str, Any]] = None,
     ) -> ToolCallResult:
         tool_params = {}
         try:
@@ -578,6 +593,7 @@ class ToolCallingLLM:
                 tool_params=tool_params,
                 user_approved=user_approved,
                 tool_number=tool_number,
+                request_context=request_context,
             )
 
         if not isinstance(tool_response, StructuredToolResult):
@@ -622,6 +638,7 @@ class ToolCallingLLM:
         trace_span=None,
         tool_number=None,
         user_approved: bool = False,
+        request_context: Optional[Dict[str, Any]] = None,
     ) -> ToolCallResult:
         if trace_span is None:
             trace_span = DummySpan()
@@ -655,6 +672,7 @@ class ToolCallingLLM:
                     previous_tool_calls=previous_tool_calls,
                     tool_number=tool_number,
                     user_approved=user_approved,
+                    request_context=request_context,
                 )
 
             prevent_overly_big_tool_response(
@@ -668,6 +686,7 @@ class ToolCallingLLM:
         self,
         tool_call_result: ToolCallResult,
         tool_number: Optional[int],
+        request_context: Optional[Dict[str, Any]] = None,
     ) -> ToolCallResult:
         """
         Handle approval for a single tool call if required.
@@ -697,6 +716,7 @@ class ToolCallingLLM:
                 tool_params=tool_call_result.result.params or {},
                 user_approved=True,
                 tool_number=tool_number,
+                request_context=request_context,
             )
             tool_call_result.result = new_response
         else:
@@ -766,6 +786,7 @@ class ToolCallingLLM:
         msgs: Optional[list[dict]] = None,
         enable_tool_approval: bool = False,
         tool_decisions: List[ToolApprovalDecision] | None = None,
+        request_context: Optional[Dict[str, Any]] = None,
     ):
         """
         This function DOES NOT call llm.completion(stream=true).
@@ -775,7 +796,9 @@ class ToolCallingLLM:
         # Process tool decisions if provided
         if msgs and tool_decisions:
             logging.info(f"Processing {len(tool_decisions)} tool decisions")
-            msgs, events = self.process_tool_decisions(msgs, tool_decisions)
+            msgs, events = self.process_tool_decisions(
+                msgs, tool_decisions, request_context
+            )
             yield from events
 
         messages: list[dict] = []
@@ -913,6 +936,7 @@ class ToolCallingLLM:
                         previous_tool_calls=tool_calls,
                         trace_span=DummySpan(),  # Streaming mode doesn't support tracing yet
                         tool_number=tool_number,
+                        request_context=request_context,
                     )
                     futures.append(future)
                     yield StreamMessage(
@@ -1045,6 +1069,7 @@ class IssueInvestigator(ToolCallingLLM):
         sections: Optional[InputSectionsDataType] = None,
         trace_span=DummySpan(),
         runbooks: Optional[RunbookCatalog] = None,
+        request_context: Optional[Dict[str, Any]] = None,
     ) -> LLMResult:
         issue_runbooks = self.runbook_manager.get_instructions_for_issue(issue)
 
@@ -1117,6 +1142,7 @@ class IssueInvestigator(ToolCallingLLM):
             response_format=response_format,
             sections=sections,
             trace_span=trace_span,
+            request_context=request_context,
         )
         res.instructions = issue_runbooks
         return res
