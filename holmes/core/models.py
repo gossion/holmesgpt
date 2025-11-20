@@ -214,6 +214,7 @@ class IssueChatRequest(ChatRequestBaseModel):
     ask: str
     investigation_result: IssueInvestigationResult
     issue_type: str
+    context: Optional[Dict[str, Any]] = None
 
 
 class WorkloadHealthRequest(BaseModel):
@@ -227,10 +228,12 @@ class WorkloadHealthRequest(BaseModel):
     include_tool_call_results: bool = False
     prompt_template: str = "builtin://kubernetes_workload_ask.jinja2"
     model: Optional[str] = None
+    context: Optional[Dict[str, Any]] = None
 
 
 class ChatRequest(ChatRequestBaseModel):
     ask: str
+    context: Optional[Dict[str, Any]] = None
 
 
 class FollowUpAction(BaseModel):
@@ -265,6 +268,7 @@ class WorkloadHealthChatRequest(ChatRequestBaseModel):
     ask: str
     workload_health_result: WorkloadHealthInvestigationResult
     resource: dict
+    context: Optional[Dict[str, Any]] = None
 
 
 workload_health_structured_output = {

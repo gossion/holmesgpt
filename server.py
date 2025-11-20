@@ -159,12 +159,14 @@ if LOG_PERFORMANCE:
 def investigate_issues(investigate_request: InvestigateRequest):
     try:
         runbooks = config.get_runbook_catalog()
+        request_context = investigate_request.context
         result = investigation.investigate_issues(
             investigate_request=investigate_request,
             dal=dal,
             config=config,
             model=investigate_request.model,
             runbooks=runbooks,
+            request_context=request_context,
         )
         return result
 
@@ -183,6 +185,7 @@ def stream_investigate_issues(req: InvestigateRequest):
         ai, system_prompt, user_prompt, response_format, sections, runbooks = (
             investigation.get_investigation_context(req, dal, config)
         )
+        request_context = req.context
 
         return StreamingResponse(
             stream_investigate_formatter(
@@ -191,6 +194,7 @@ def stream_investigate_issues(req: InvestigateRequest):
                     user_prompt=user_prompt,
                     response_format=response_format,
                     sections=sections,
+                    request_context=request_context,
                 ),
                 runbooks,
             ),
@@ -247,11 +251,13 @@ def workload_health_check(request: WorkloadHealthRequest):
             },
         )
 
+        request_context = request.context
         ai_call = ai.prompt_call(
             system_prompt,
             request.ask,
             HOLMES_POST_PROCESSING_PROMPT,
             workload_health_structured_output,
+            request_context=request_context,
         )
 
         ai_call.result = clear_json_markdown(ai_call.result)
@@ -285,7 +291,8 @@ def workload_health_conversation(
             config=config,
             global_instructions=global_instructions,
         )
-        llm_call = ai.messages_call(messages=messages)
+        request_context = request.context
+        llm_call = ai.messages_call(messages=messages, request_context=request_context)
 
         return ChatResponse(
             analysis=llm_call.result,
@@ -316,7 +323,8 @@ def issue_conversation(issue_chat_request: IssueChatRequest):
             global_instructions=global_instructions,
             runbooks=runbooks,
         )
-        llm_call = ai.messages_call(messages=messages)
+        request_context = issue_chat_request.context
+        llm_call = ai.messages_call(messages=messages, request_context=request_context)
 
         return ChatResponse(
             analysis=llm_call.result,
@@ -358,6 +366,7 @@ def chat(chat_request: ChatRequest):
             additional_system_prompt=chat_request.additional_system_prompt,
             runbooks=runbooks,
         )
+        request_context = chat_request.context
 
         follow_up_actions = []
         if not already_answered(chat_request.conversation_history):
@@ -389,13 +398,14 @@ def chat(chat_request: ChatRequest):
                         msgs=messages,
                         enable_tool_approval=chat_request.enable_tool_approval or False,
                         tool_decisions=chat_request.tool_decisions,
+                        request_context=request_context,
                     ),
                     [f.model_dump() for f in follow_up_actions],
                 ),
                 media_type="text/event-stream",
             )
         else:
-            llm_call = ai.messages_call(messages=messages)
+            llm_call = ai.messages_call(messages=messages, request_context=request_context)
 
             # For non-streaming, we need to handle approvals differently
             # This is a simplified version - in practice, non-streaming with approvals

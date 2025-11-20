@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from holmes.core.transformers import BaseTransformer
 from holmes.utils.config_utils import merge_transformers
 import time
+
 from rich.table import Table
 
 logger = logging.getLogger(__name__)
@@ -172,6 +173,22 @@ class ToolInvokeContext(BaseModel):
     max_token_count: int
     tool_call_id: str
     tool_name: str
+    request_context: Optional[Dict[str, Any]] = None
+
+    def model_dump(self, **kwargs):
+        """Override to exclude sensitive context from serialization"""
+        data = super().model_dump(**kwargs)
+        if "request_context" in data and data["request_context"]:
+            # Sanitize: show keys but not values
+            data["request_context"] = {
+                k: "***REDACTED***" for k in data["request_context"].keys()
+            }
+        return data
+
+    def __str__(self):
+        """Override to prevent accidental context leakage in logs"""
+        context_keys = list((self.request_context or {}).keys())
+        return f"ToolInvokeContext(tool_number={self.tool_number}, user_approved={self.user_approved}, context_keys={context_keys})"
 
 
 class Tool(ABC, BaseModel):

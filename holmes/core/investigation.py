@@ -1,5 +1,5 @@
 import logging
-from typing import Optional
+from typing import Any, Dict, Optional
 
 
 from holmes.common.env_vars import HOLMES_POST_PROCESSING_PROMPT
@@ -30,6 +30,7 @@ def investigate_issues(
     model: Optional[str] = None,
     trace_span=DummySpan(),
     runbooks: Optional[RunbookCatalog] = None,
+    request_context: Optional[Dict[str, Any]] = None,
 ) -> InvestigationResult:
     context = dal.get_issue_data(investigate_request.context.get("robusta_issue_id"))
 
@@ -62,6 +63,7 @@ def investigate_issues(
         sections=investigate_request.sections,
         trace_span=trace_span,
         runbooks=runbooks,
+        request_context=request_context,
     )
 
     (text_response, sections) = process_response_into_sections(investigation.result)
