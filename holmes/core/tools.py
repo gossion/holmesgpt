@@ -26,25 +26,27 @@ from pydantic import (
     ConfigDict,
     Field,
     FilePath,
-    model_validator,
     PrivateAttr,
+    model_validator,
 )
 from rich.console import Console
 
 from holmes.core.llm import LLM
 from holmes.core.openai_formatting import format_tool_to_open_ai_standard
-from holmes.plugins.prompts import load_and_render_prompt
 from holmes.core.transformers import (
-    registry,
-    TransformerError,
     Transformer,
+    TransformerError,
+    registry,
 )
+from holmes.plugins.prompts import load_and_render_prompt
 
 if TYPE_CHECKING:
     from holmes.core.transformers import BaseTransformer
-from holmes.utils.config_utils import merge_transformers
 import time
+
 from rich.table import Table
+
+from holmes.utils.config_utils import merge_transformers
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +170,22 @@ class ToolInvokeContext(BaseModel):
     user_approved: bool = False
     llm: LLM
     max_token_count: int
+    request_context: Optional[Dict[str, Any]] = None
+
+    def model_dump(self, **kwargs):
+        """Override to exclude sensitive context from serialization"""
+        data = super().model_dump(**kwargs)
+        if "request_context" in data and data["request_context"]:
+            # Sanitize: show keys but not values
+            data["request_context"] = {
+                k: "***REDACTED***" for k in data["request_context"].keys()
+            }
+        return data
+
+    def __str__(self):
+        """Override to prevent accidental context leakage in logs"""
+        context_keys = list((self.request_context or {}).keys())
+        return f"ToolInvokeContext(tool_number={self.tool_number}, user_approved={self.user_approved}, context_keys={context_keys})"
 
 
 class Tool(ABC, BaseModel):

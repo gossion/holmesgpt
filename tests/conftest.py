@@ -1,5 +1,6 @@
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
+
 import pytest
 import yaml
 
@@ -134,6 +135,7 @@ def create_mock_tool_invoke_context(
     user_approved: bool = False,
     max_token_count: int = 128000,
     llm: Optional[LLM] = None,
+    request_context: Optional[Dict[str, Any]] = None,
 ) -> ToolInvokeContext:
     """
     Create a mock ToolInvokeContext for testing purposes.
@@ -143,6 +145,7 @@ def create_mock_tool_invoke_context(
         user_approved: Whether the tool is user approved
         max_token_count: Optional maximum token count
         llm: Optional LLM instance. If None, uses MockLLM
+        request_context: Optional request context dict
 
     Returns:
         ToolInvokeContext instance suitable for testing
@@ -155,4 +158,5 @@ def create_mock_tool_invoke_context(
         user_approved=user_approved,
         llm=llm,
         max_token_count=max_token_count,
+        request_context=request_context,
     )

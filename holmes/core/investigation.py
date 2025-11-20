@@ -1,24 +1,21 @@
 import logging
-from typing import Optional
-
+from typing import Any, Dict, Optional
 
 from holmes.common.env_vars import HOLMES_POST_PROCESSING_PROMPT
 from holmes.config import Config
-from holmes.core.investigation_structured_output import process_response_into_sections
-from holmes.core.issue import Issue
-from holmes.core.models import InvestigateRequest, InvestigationResult
-from holmes.core.supabase_dal import SupabaseDal
-from holmes.core.tracing import DummySpan, SpanType
-from holmes.plugins.runbooks import RunbookCatalog
-from holmes.utils.global_instructions import add_runbooks_to_user_prompt
-
 from holmes.core.investigation_structured_output import (
     DEFAULT_SECTIONS,
     REQUEST_STRUCTURED_OUTPUT_FROM_LLM,
     get_output_format_for_investigation,
+    process_response_into_sections,
 )
-
+from holmes.core.issue import Issue
+from holmes.core.models import InvestigateRequest, InvestigationResult
+from holmes.core.supabase_dal import SupabaseDal
+from holmes.core.tracing import DummySpan, SpanType
 from holmes.plugins.prompts import load_and_render_prompt
+from holmes.plugins.runbooks import RunbookCatalog
+from holmes.utils.global_instructions import add_runbooks_to_user_prompt
 
 
 def investigate_issues(
@@ -28,6 +25,7 @@ def investigate_issues(
     model: Optional[str] = None,
     trace_span=DummySpan(),
     runbooks: Optional[RunbookCatalog] = None,
+    request_context: Optional[Dict[str, Any]] = None,
 ) -> InvestigationResult:
     context = dal.get_issue_data(investigate_request.context.get("robusta_issue_id"))
 
@@ -64,6 +62,7 @@ def investigate_issues(
         sections=investigate_request.sections,
         trace_span=trace_span,
         runbooks=runbooks,
+        request_context=request_context,
     )
 
     (text_response, sections) = process_response_into_sections(investigation.result)

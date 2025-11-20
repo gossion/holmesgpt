@@ -8,36 +8,40 @@ from pydantic import ValidationError
 
 import holmes.utils.env as env_utils
 from holmes.common.env_vars import (
-    USE_LEGACY_KUBERNETES_LOGS,
     DISABLE_PROMETHEUS_TOOLSET,
+    USE_LEGACY_KUBERNETES_LOGS,
 )
 from holmes.core.supabase_dal import SupabaseDal
 from holmes.core.tools import Toolset, ToolsetType, ToolsetYamlFromConfig, YAMLToolset
+from holmes.plugins.toolsets.aks_toolset import AKSToolset
 from holmes.plugins.toolsets.atlas_mongodb.mongodb_atlas import MongoDBAtlasToolset
 from holmes.plugins.toolsets.azure_sql.azure_sql_toolset import AzureSQLToolset
 from holmes.plugins.toolsets.bash.bash_toolset import BashExecutorToolset
 from holmes.plugins.toolsets.coralogix.toolset_coralogix_logs import (
     CoralogixLogsToolset,
 )
+from holmes.plugins.toolsets.datadog.toolset_datadog_general import (
+    DatadogGeneralToolset,
+)
 from holmes.plugins.toolsets.datadog.toolset_datadog_logs import DatadogLogsToolset
 from holmes.plugins.toolsets.datadog.toolset_datadog_metrics import (
     DatadogMetricsToolset,
 )
-from holmes.plugins.toolsets.datadog.toolset_datadog_traces import (
-    DatadogTracesToolset,
-)
 from holmes.plugins.toolsets.datadog.toolset_datadog_rds import (
     DatadogRDSToolset,
 )
-from holmes.plugins.toolsets.datadog.toolset_datadog_general import (
-    DatadogGeneralToolset,
+from holmes.plugins.toolsets.datadog.toolset_datadog_traces import (
+    DatadogTracesToolset,
 )
 from holmes.plugins.toolsets.git import GitToolset
-from holmes.plugins.toolsets.grafana.toolset_grafana import GrafanaToolset
 from holmes.plugins.toolsets.grafana.loki.toolset_grafana_loki import GrafanaLokiToolset
+from holmes.plugins.toolsets.grafana.toolset_grafana import GrafanaToolset
 from holmes.plugins.toolsets.grafana.toolset_grafana_tempo import GrafanaTempoToolset
 from holmes.plugins.toolsets.internet.internet import InternetToolset
 from holmes.plugins.toolsets.internet.notion import NotionToolset
+from holmes.plugins.toolsets.investigator.core_investigation import (
+    CoreInvestigationToolset,
+)
 from holmes.plugins.toolsets.kafka import KafkaToolset
 from holmes.plugins.toolsets.kubernetes_logs import KubernetesLogsToolset
 from holmes.plugins.toolsets.mcp.toolset_mcp import RemoteMCPToolset
@@ -53,9 +57,6 @@ from holmes.plugins.toolsets.robusta.robusta import RobustaToolset
 from holmes.plugins.toolsets.runbook.runbook_fetcher import RunbookToolset
 from holmes.plugins.toolsets.servicenow_tables.servicenow_tables import (
     ServiceNowTablesToolset,
-)
-from holmes.plugins.toolsets.investigator.core_investigation import (
-    CoreInvestigationToolset,
 )
 
 THIS_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -107,6 +108,7 @@ def load_python_toolsets(dal: Optional[SupabaseDal]) -> List[Toolset]:
         RunbookToolset(dal=dal),
         AzureSQLToolset(),
         ServiceNowTablesToolset(),
+        AKSToolset(),
     ]
 
     if not DISABLE_PROMETHEUS_TOOLSET:
