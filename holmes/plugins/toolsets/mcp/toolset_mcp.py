@@ -1,26 +1,25 @@
-from holmes.core.tools import (
-    ToolInvokeContext,
-    Toolset,
-    Tool,
-    ToolParameter,
-    StructuredToolResult,
-    StructuredToolResultStatus,
-    CallablePrerequisite,
-)
+import asyncio
+import json
+import logging
+from contextlib import asynccontextmanager
+from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
 
-from typing import Dict, Any, List, Optional
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamablehttp_client
-
 from mcp.types import Tool as MCP_Tool
+from pydantic import AnyUrl, BaseModel, Field, model_validator
 
-import asyncio
-from contextlib import asynccontextmanager
-from pydantic import BaseModel, Field, AnyUrl, model_validator
-from typing import Tuple
-import logging
-from enum import Enum
+from holmes.core.tools import (
+    CallablePrerequisite,
+    StructuredToolResult,
+    StructuredToolResultStatus,
+    Tool,
+    ToolInvokeContext,
+    ToolParameter,
+    Toolset,
+)
 
 
 class MCPMode(str, Enum):
@@ -36,10 +35,15 @@ class MCPConfig(BaseModel):
 
 @asynccontextmanager
 async def get_initialized_mcp_session(
-    url: str, headers: Optional[Dict[str, str]], mode: MCPMode
+    url: str,
+    headers: Optional[Dict[str, str]],
+    mode: MCPMode,
+    additional_headers: Optional[Dict[str, str]] = None,
 ):
+    merged_headers = {**(headers or {}), **(additional_headers or {})}
+
     if mode == MCPMode.SSE:
-        async with sse_client(url, headers) as (
+        async with sse_client(url, merged_headers) as (
             read_stream,
             write_stream,
         ):
@@ -47,7 +51,7 @@ async def get_initialized_mcp_session(
                 _ = await session.initialize()
                 yield session
     else:
-        async with streamablehttp_client(url, headers=headers) as (
+        async with streamablehttp_client(url, headers=merged_headers) as (
             read_stream,
             write_stream,
             _,
@@ -62,7 +66,8 @@ class RemoteMCPTool(Tool):
 
     def _invoke(self, params: dict, context: ToolInvokeContext) -> StructuredToolResult:
         try:
-            return asyncio.run(self._invoke_async(params))
+            dynamic_headers = self._build_dynamic_headers(context)
+            return asyncio.run(self._invoke_async(params, dynamic_headers))
         except Exception as e:
             return StructuredToolResult(
                 status=StructuredToolResultStatus.ERROR,
@@ -71,8 +76,15 @@ class RemoteMCPTool(Tool):
                 invocation=f"MCPtool {self.name} with params {params}",
             )
 
-    async def _invoke_async(self, params: Dict) -> StructuredToolResult:
-        async with self.toolset.get_initialized_session() as session:
+    def _build_dynamic_headers(self, context: ToolInvokeContext) -> Dict[str, str]:
+        if context.request_context:
+            return {"X-Request-Context": json.dumps(context.request_context)}
+        return {}
+
+    async def _invoke_async(
+        self, params: Dict, additional_headers: Optional[Dict[str, str]] = None
+    ) -> StructuredToolResult:
+        async with self.toolset.get_initialized_session(additional_headers) as session:
             tool_result = await session.call_tool(self.name, params)
 
         merged_text = " ".join(c.text for c in tool_result.content if c.type == "text")
@@ -210,9 +222,14 @@ class RemoteMCPToolset(Toolset):
         async with self.get_initialized_session() as session:
             return await session.list_tools()
 
-    def get_initialized_session(self):
+    def get_initialized_session(
+        self, additional_headers: Optional[Dict[str, str]] = None
+    ):
         return get_initialized_mcp_session(
-            str(self._mcp_config.url), self._mcp_config.headers, self._mcp_config.mode
+            str(self._mcp_config.url),
+            self._mcp_config.headers,
+            self._mcp_config.mode,
+            additional_headers,
         )
 
     def get_example_config(self) -> Dict[str, Any]:
