@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock, patch
 from holmes.core.tools import (
     ToolParameter,
     StructuredToolResultStatus,
+    ToolInvokeContext,
 )
+from holmes.core.llm import LLM
 from holmes.plugins.toolsets.mcp.toolset_mcp import (
     RemoteMCPToolset,
     RemoteMCPTool,
@@ -1125,3 +1127,195 @@ class TestStdio:
 
         # Verify the tools loaded in the toolset match what we got from list_tools
         assert len(toolset.tools) == len(list_result.tools)
+
+
+class TestContextPassing:
+    """Test context passing via X-Tool-Context header"""
+
+    def test_context_serialization_with_default_fields(
+        self, suppress_migration_warnings
+    ):
+        """Test that default fields are serialized correctly"""
+        mock_toolset = RemoteMCPToolset(
+            name="test_toolset",
+            description="Test toolset",
+            config={"url": "http://localhost:1234"},
+        )
+        mock_toolset._mcp_config = MCPConfig(
+            url="http://localhost:1234", mode=MCPMode.SSE
+        )
+
+        tool = RemoteMCPTool(
+            name="test_tool",
+            description="Test tool",
+            toolset=mock_toolset,
+        )
+
+        mock_llm = AsyncMock(spec=LLM)
+        context = ToolInvokeContext(
+            tool_number=1,
+            user_approved=True,
+            llm=mock_llm,
+            max_token_count=8000,
+            tool_call_id="call_123",
+            tool_name="test_tool",
+        )
+
+        serialized = tool._serialize_context(context, fields=None)
+
+        assert "user_approved" in serialized
+        assert serialized["user_approved"] is True
+        assert "max_token_count" in serialized
+        assert serialized["max_token_count"] == 8000
+        assert "tool_name" in serialized
+        assert serialized["tool_name"] == "test_tool"
+        assert "llm" not in serialized
+
+    def test_context_serialization_with_custom_fields(
+        self, suppress_migration_warnings
+    ):
+        """Test that custom fields are serialized correctly"""
+        mock_toolset = RemoteMCPToolset(
+            name="test_toolset",
+            description="Test toolset",
+            config={
+                "url": "http://localhost:1234",
+                "context_fields": ["tool_name", "tool_number"],
+            },
+        )
+        mock_toolset._mcp_config = MCPConfig(
+            url="http://localhost:1234",
+            mode=MCPMode.SSE,
+            context_fields=["tool_name", "tool_number"],
+        )
+
+        tool = RemoteMCPTool(
+            name="test_tool",
+            description="Test tool",
+            toolset=mock_toolset,
+        )
+
+        mock_llm = AsyncMock(spec=LLM)
+        context = ToolInvokeContext(
+            tool_number=5,
+            user_approved=True,
+            llm=mock_llm,
+            max_token_count=8000,
+            tool_call_id="call_123",
+            tool_name="test_tool",
+        )
+
+        custom_fields = ["tool_name", "tool_number"]
+        serialized = tool._serialize_context(context, fields=custom_fields)
+
+        assert "tool_name" in serialized
+        assert serialized["tool_name"] == "test_tool"
+        assert "tool_number" in serialized
+        assert serialized["tool_number"] == 5
+        assert "user_approved" not in serialized
+        assert "max_token_count" not in serialized
+        assert "llm" not in serialized
+
+    def test_build_dynamic_headers_with_context(self, suppress_migration_warnings):
+        """Test that X-Tool-Context header is built correctly"""
+        mock_toolset = RemoteMCPToolset(
+            name="test_toolset",
+            description="Test toolset",
+            config={"url": "http://localhost:1234"},
+        )
+        mock_toolset._mcp_config = MCPConfig(
+            url="http://localhost:1234", mode=MCPMode.SSE
+        )
+
+        tool = RemoteMCPTool(
+            name="test_tool",
+            description="Test tool",
+            toolset=mock_toolset,
+        )
+
+        mock_llm = AsyncMock(spec=LLM)
+        context = ToolInvokeContext(
+            tool_number=1,
+            user_approved=False,
+            llm=mock_llm,
+            max_token_count=8000,
+            tool_call_id="call_123",
+            tool_name="test_tool",
+        )
+
+        headers = tool._build_dynamic_headers(context)
+
+        assert "X-Tool-Context" in headers
+        import json
+
+        context_data = json.loads(headers["X-Tool-Context"])
+        assert "tool_name" in context_data
+        assert context_data["tool_name"] == "test_tool"
+        assert "max_token_count" in context_data
+        assert context_data["max_token_count"] == 8000
+
+    def test_build_dynamic_headers_empty_when_no_fields(
+        self, suppress_migration_warnings
+    ):
+        """Test that headers are empty when no serializable fields have values"""
+        mock_toolset = RemoteMCPToolset(
+            name="test_toolset",
+            description="Test toolset",
+            config={
+                "url": "http://localhost:1234",
+                "context_fields": ["tool_number"],
+            },
+        )
+        mock_toolset._mcp_config = MCPConfig(
+            url="http://localhost:1234",
+            mode=MCPMode.SSE,
+            context_fields=["tool_number"],
+        )
+
+        tool = RemoteMCPTool(
+            name="test_tool",
+            description="Test tool",
+            toolset=mock_toolset,
+        )
+
+        mock_llm = AsyncMock(spec=LLM)
+        context = ToolInvokeContext(
+            tool_number=None,
+            user_approved=False,
+            llm=mock_llm,
+            max_token_count=8000,
+            tool_call_id="call_123",
+            tool_name="test_tool",
+        )
+
+        headers = tool._build_dynamic_headers(context)
+
+        assert headers == {}
+
+    def test_context_fields_config_loaded(self, monkeypatch, suppress_migration_warnings):
+        """Test that context_fields configuration is loaded correctly"""
+        mcp_toolset = RemoteMCPToolset(
+            name="test_mcp",
+            description="Test toolset",
+            config={
+                "url": "http://localhost:1234",
+                "context_fields": ["tool_name", "tool_number", "tool_call_id"],
+            },
+        )
+
+        async def mock_get_server_tools():
+            return ListToolsResult(tools=[])
+
+        monkeypatch.setattr(mcp_toolset, "_get_server_tools", mock_get_server_tools)
+        mcp_toolset.prerequisites_callable(config=mcp_toolset.config)
+
+        assert mcp_toolset._mcp_config.context_fields == [
+            "tool_name",
+            "tool_number",
+            "tool_call_id",
+        ]
+        assert mcp_toolset.get_context_fields() == [
+            "tool_name",
+            "tool_number",
+            "tool_call_id",
+        ]

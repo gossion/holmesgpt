@@ -1,31 +1,28 @@
+import asyncio
 import json
+import logging
+import threading
+from contextlib import asynccontextmanager
+from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+from mcp.client.session import ClientSession
+from mcp.client.sse import sse_client
+from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp.client.streamable_http import streamablehttp_client
+from mcp.types import Tool as MCP_Tool
+from pydantic import AnyUrl, BaseModel, Field, model_validator
 
 from holmes.common.env_vars import SSE_READ_TIMEOUT
 from holmes.core.tools import (
-    ToolInvokeContext,
-    Toolset,
-    Tool,
-    ToolParameter,
+    CallablePrerequisite,
     StructuredToolResult,
     StructuredToolResultStatus,
-    CallablePrerequisite,
+    Tool,
+    ToolInvokeContext,
+    ToolParameter,
+    Toolset,
 )
-
-from typing import Dict, Any, List, Optional, Union
-from mcp.client.session import ClientSession
-from mcp.client.sse import sse_client
-from mcp.client.streamable_http import streamablehttp_client
-from mcp.client.stdio import stdio_client, StdioServerParameters
-
-from mcp.types import Tool as MCP_Tool
-
-import asyncio
-from contextlib import asynccontextmanager
-from pydantic import BaseModel, Field, AnyUrl, model_validator
-from typing import Tuple
-import logging
-from enum import Enum
-import threading
 
 # Lock per MCP server URL to serialize calls to the same server
 _server_locks: Dict[str, threading.Lock] = {}
@@ -50,6 +47,7 @@ class MCPConfig(BaseModel):
     url: AnyUrl
     mode: MCPMode = MCPMode.SSE
     headers: Optional[Dict[str, str]] = None
+    context_fields: Optional[List[str]] = None
 
     def get_lock_string(self) -> str:
         return str(self.url)
@@ -66,7 +64,9 @@ class StdioMCPConfig(BaseModel):
 
 
 @asynccontextmanager
-async def get_initialized_mcp_session(toolset: "RemoteMCPToolset"):
+async def get_initialized_mcp_session(
+    toolset: "RemoteMCPToolset", additional_headers: Optional[Dict[str, str]] = None
+):
     if toolset._mcp_config is None:
         raise ValueError("MCP config is not initialized")
 
@@ -85,8 +85,12 @@ async def get_initialized_mcp_session(toolset: "RemoteMCPToolset"):
                 yield session
     elif toolset._mcp_config.mode == MCPMode.SSE:
         url = str(toolset._mcp_config.url)
+        merged_headers = {
+            **(toolset._mcp_config.headers or {}),
+            **(additional_headers or {}),
+        }
         async with sse_client(
-            url, toolset._mcp_config.headers, sse_read_timeout=SSE_READ_TIMEOUT
+            url, merged_headers, sse_read_timeout=SSE_READ_TIMEOUT
         ) as (
             read_stream,
             write_stream,
@@ -96,8 +100,12 @@ async def get_initialized_mcp_session(toolset: "RemoteMCPToolset"):
                 yield session
     else:
         url = str(toolset._mcp_config.url)
+        merged_headers = {
+            **(toolset._mcp_config.headers or {}),
+            **(additional_headers or {}),
+        }
         async with streamablehttp_client(
-            url, headers=toolset._mcp_config.headers, sse_read_timeout=SSE_READ_TIMEOUT
+            url, headers=merged_headers, sse_read_timeout=SSE_READ_TIMEOUT
         ) as (
             read_stream,
             write_stream,
@@ -119,8 +127,9 @@ class RemoteMCPTool(Tool):
                 raise ValueError("MCP config not initialized")
 
             lock = get_server_lock(str(self.toolset._mcp_config.get_lock_string()))
+            dynamic_headers = self._build_dynamic_headers(context)
             with lock:
-                return asyncio.run(self._invoke_async(params))
+                return asyncio.run(self._invoke_async(params, dynamic_headers))
         except Exception as e:
             return StructuredToolResult(
                 status=StructuredToolResultStatus.ERROR,
@@ -128,6 +137,33 @@ class RemoteMCPTool(Tool):
                 params=params,
                 invocation=f"MCPtool {self.name} with params {params}",
             )
+
+    def _build_dynamic_headers(self, context: ToolInvokeContext) -> Dict[str, str]:
+        context_fields = self.toolset.get_context_fields()
+        context_dict = self._serialize_context(context, context_fields)
+
+        if context_dict:
+            return {"X-Tool-Context": json.dumps(context_dict)}
+        return {}
+
+    def _serialize_context(
+        self, context: ToolInvokeContext, fields: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        default_fields = [
+            "user_approved",
+            "max_token_count",
+            "tool_name",
+        ]
+
+        fields_to_serialize = fields if fields is not None else default_fields
+
+        result = {}
+        for field in fields_to_serialize:
+            value = getattr(context, field, None)
+            if value is not None:
+                result[field] = value
+
+        return result
 
     @staticmethod
     def _is_content_error(content: str) -> bool:
@@ -138,8 +174,12 @@ class RemoteMCPTool(Tool):
         except Exception:
             return False
 
-    async def _invoke_async(self, params: Dict) -> StructuredToolResult:
-        async with get_initialized_mcp_session(self.toolset) as session:
+    async def _invoke_async(
+        self, params: Dict, additional_headers: Optional[Dict[str, str]] = None
+    ) -> StructuredToolResult:
+        async with get_initialized_mcp_session(
+            self.toolset, additional_headers
+        ) as session:
             tool_result = await session.call_tool(self.name, params)
 
         merged_text = " ".join(c.text for c in tool_result.content if c.type == "text")
@@ -202,6 +242,11 @@ class RemoteMCPToolset(Toolset):
     tools: List[RemoteMCPTool] = Field(default_factory=list)  # type: ignore
     icon_url: str = "https://registry.npmmirror.com/@lobehub/icons-static-png/1.46.0/files/light/mcp.png"
     _mcp_config: Optional[Union[MCPConfig, StdioMCPConfig]] = None
+
+    def get_context_fields(self) -> Optional[List[str]]:
+        if isinstance(self._mcp_config, MCPConfig):
+            return self._mcp_config.context_fields
+        return None
 
     def model_post_init(self, __context: Any) -> None:
         self.prerequisites = [
@@ -290,5 +335,6 @@ class RemoteMCPToolset(Toolset):
             url=AnyUrl("http://example.com:8000/mcp/messages"),
             mode=MCPMode.STREAMABLE_HTTP,
             headers={"Authorization": "Bearer YOUR_TOKEN"},
+            context_fields=["tool_name", "tool_number", "request_context"],
         )
         return example_config.model_dump()
