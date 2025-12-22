@@ -1,6 +1,7 @@
 import asyncio
-import pytest
+import json
 import logging
+import pytest
 import shutil
 import subprocess
 from unittest.mock import AsyncMock, patch
@@ -1246,8 +1247,6 @@ class TestContextPassing:
         headers = tool._build_dynamic_headers(context)
 
         assert "X-Tool-Context" in headers
-        import json
-
         context_data = json.loads(headers["X-Tool-Context"])
         assert "tool_name" in context_data
         assert context_data["tool_name"] == "test_tool"
