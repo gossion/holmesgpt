@@ -339,6 +339,6 @@ class RemoteMCPToolset(Toolset):
             url=AnyUrl("http://example.com:8000/mcp/messages"),
             mode=MCPMode.STREAMABLE_HTTP,
             headers={"Authorization": "Bearer YOUR_TOKEN"},
-            context_fields=["tool_name", "tool_number", "request_context"],
+            context_fields=[],
         )
         return example_config.model_dump()
