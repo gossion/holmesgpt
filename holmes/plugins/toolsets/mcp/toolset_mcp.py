@@ -127,9 +127,12 @@ class RemoteMCPTool(Tool):
                 raise ValueError("MCP config not initialized")
 
             lock = get_server_lock(str(self.toolset._mcp_config.get_lock_string()))
-            dynamic_headers = self._build_dynamic_headers(context)
+
+            # Inject context into params instead of headers for universal transport support
+            params_with_context = self._inject_tool_context(params, context)
+
             with lock:
-                return asyncio.run(self._invoke_async(params, dynamic_headers))
+                return asyncio.run(self._invoke_async(params_with_context, additional_headers=None))
         except Exception as e:
             return StructuredToolResult(
                 status=StructuredToolResultStatus.ERROR,
@@ -138,13 +141,18 @@ class RemoteMCPTool(Tool):
                 invocation=f"MCPtool {self.name} with params {params}",
             )
 
-    def _build_dynamic_headers(self, context: ToolInvokeContext) -> Dict[str, str]:
+    def _inject_tool_context(self, params: dict, context: ToolInvokeContext) -> dict:
+        """Inject _tool_context into params for universal transport support (stdio/SSE/http)."""
         context_fields = self.toolset.get_context_fields()
         context_dict = self._serialize_context(context, context_fields)
 
-        if context_dict:
-            return {"X-Tool-Context": json.dumps(context_dict)}
-        return {}
+        if not context_dict:
+            return params
+
+        # Create a copy of params and inject _tool_context
+        params_with_context = params.copy()
+        params_with_context["_tool_context"] = context_dict
+        return params_with_context
 
     def _serialize_context(
         self, context: ToolInvokeContext, fields: Optional[List[str]] = None
