@@ -1131,12 +1131,12 @@ class TestStdio:
 
 
 class TestContextPassing:
-    """Test context passing via X-Tool-Context header"""
+    """Test context passing via _tool_context parameter"""
 
     def test_context_serialization_with_default_fields(
         self, suppress_migration_warnings
     ):
-        """Test that default fields are serialized correctly"""
+        """Test that default fields are empty by default"""
         mock_toolset = RemoteMCPToolset(
             name="test_toolset",
             description="Test toolset",
@@ -1164,12 +1164,11 @@ class TestContextPassing:
 
         serialized = tool._serialize_context(context, fields=None)
 
-        assert "user_approved" in serialized
-        assert serialized["user_approved"] is True
-        assert "max_token_count" in serialized
-        assert serialized["max_token_count"] == 8000
-        assert "tool_name" in serialized
-        assert serialized["tool_name"] == "test_tool"
+        # Default fields are now empty, so serialized should be empty
+        assert serialized == {}
+        assert "user_approved" not in serialized
+        assert "max_token_count" not in serialized
+        assert "tool_name" not in serialized
         assert "llm" not in serialized
 
     def test_context_serialization_with_custom_fields(
@@ -1217,15 +1216,20 @@ class TestContextPassing:
         assert "max_token_count" not in serialized
         assert "llm" not in serialized
 
-    def test_build_dynamic_headers_with_context(self, suppress_migration_warnings):
-        """Test that X-Tool-Context header is built correctly"""
+    def test_inject_tool_context_with_custom_fields(self, suppress_migration_warnings):
+        """Test that _tool_context is injected into params correctly"""
         mock_toolset = RemoteMCPToolset(
             name="test_toolset",
             description="Test toolset",
-            config={"url": "http://localhost:1234"},
+            config={
+                "url": "http://localhost:1234",
+                "context_fields": ["tool_name", "max_token_count"],
+            },
         )
         mock_toolset._mcp_config = MCPConfig(
-            url="http://localhost:1234", mode=MCPMode.SSE
+            url="http://localhost:1234",
+            mode=MCPMode.SSE,
+            context_fields=["tool_name", "max_token_count"],
         )
 
         tool = RemoteMCPTool(
@@ -1244,19 +1248,23 @@ class TestContextPassing:
             tool_name="test_tool",
         )
 
-        headers = tool._build_dynamic_headers(context)
+        params = {"operation": "test"}
+        params_with_context = tool._inject_tool_context(params, context)
 
-        assert "X-Tool-Context" in headers
-        context_data = json.loads(headers["X-Tool-Context"])
+        assert "_tool_context" in params_with_context
+        context_data = params_with_context["_tool_context"]
         assert "tool_name" in context_data
         assert context_data["tool_name"] == "test_tool"
         assert "max_token_count" in context_data
         assert context_data["max_token_count"] == 8000
+        # Original params should still be present
+        assert "operation" in params_with_context
+        assert params_with_context["operation"] == "test"
 
-    def test_build_dynamic_headers_empty_when_no_fields(
+    def test_inject_tool_context_empty_when_no_fields(
         self, suppress_migration_warnings
     ):
-        """Test that headers are empty when no serializable fields have values"""
+        """Test that _tool_context is not added when no serializable fields have values"""
         mock_toolset = RemoteMCPToolset(
             name="test_toolset",
             description="Test toolset",
@@ -1287,9 +1295,12 @@ class TestContextPassing:
             tool_name="test_tool",
         )
 
-        headers = tool._build_dynamic_headers(context)
+        params = {"operation": "test"}
+        params_with_context = tool._inject_tool_context(params, context)
 
-        assert headers == {}
+        # When context is empty, _tool_context should not be added
+        assert "_tool_context" not in params_with_context
+        assert params_with_context == params
 
     def test_context_fields_config_loaded(self, monkeypatch, suppress_migration_warnings):
         """Test that context_fields configuration is loaded correctly"""

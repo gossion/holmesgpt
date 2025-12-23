@@ -157,11 +157,7 @@ class RemoteMCPTool(Tool):
     def _serialize_context(
         self, context: ToolInvokeContext, fields: Optional[List[str]] = None
     ) -> Dict[str, Any]:
-        default_fields = [
-            "user_approved",
-            "max_token_count",
-            "tool_name",
-        ]
+        default_fields = []
 
         fields_to_serialize = fields if fields is not None else default_fields
 
