@@ -58,6 +58,7 @@ class StdioMCPConfig(BaseModel):
     command: str
     args: Optional[List[str]] = None
     env: Optional[Dict[str, str]] = None
+    context_fields: Optional[List[str]] = None
 
     def get_lock_string(self) -> str:
         return str(self.command)
@@ -235,6 +236,8 @@ class RemoteMCPToolset(Toolset):
 
     def get_context_fields(self) -> Optional[List[str]]:
         if isinstance(self._mcp_config, MCPConfig):
+            return self._mcp_config.context_fields
+        elif isinstance(self._mcp_config, StdioMCPConfig):
             return self._mcp_config.context_fields
         return None
 
