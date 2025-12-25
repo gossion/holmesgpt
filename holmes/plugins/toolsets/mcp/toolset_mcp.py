@@ -28,6 +28,16 @@ from holmes.core.tools import (
 _server_locks: Dict[str, threading.Lock] = {}
 _locks_lock = threading.Lock()
 
+# Whitelist of JSON-serializable context fields from ToolInvokeContext
+# Excludes 'llm' (non-serializable) and other complex objects
+SERIALIZABLE_CONTEXT_FIELDS = {
+    "tool_number",
+    "user_approved",
+    "max_token_count",
+    "tool_call_id",
+    "tool_name",
+}
+
 
 def get_server_lock(url: str) -> threading.Lock:
     """Get or create a lock for a specific MCP server URL."""
@@ -152,8 +162,24 @@ class RemoteMCPTool(Tool):
 
         fields_to_serialize = fields if fields is not None else default_fields
 
+        # Validate requested fields against whitelist
+        if fields_to_serialize:
+            invalid_fields = [
+                f for f in fields_to_serialize if f not in SERIALIZABLE_CONTEXT_FIELDS
+            ]
+            if invalid_fields:
+                logging.warning(
+                    f"MCP toolset '{self.toolset.name}': Invalid or non-serializable "
+                    f"context fields configured: {invalid_fields}. "
+                    f"Valid fields: {sorted(SERIALIZABLE_CONTEXT_FIELDS)}"
+                )
+
         result = {}
         for field in fields_to_serialize:
+            # Skip non-whitelisted fields
+            if field not in SERIALIZABLE_CONTEXT_FIELDS:
+                continue
+
             value = getattr(context, field, None)
             if value is not None:
                 result[field] = value
