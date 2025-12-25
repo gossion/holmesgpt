@@ -64,9 +64,7 @@ class StdioMCPConfig(BaseModel):
 
 
 @asynccontextmanager
-async def get_initialized_mcp_session(
-    toolset: "RemoteMCPToolset", additional_headers: Optional[Dict[str, str]] = None
-):
+async def get_initialized_mcp_session(toolset: "RemoteMCPToolset"):
     if toolset._mcp_config is None:
         raise ValueError("MCP config is not initialized")
 
@@ -85,12 +83,8 @@ async def get_initialized_mcp_session(
                 yield session
     elif toolset._mcp_config.mode == MCPMode.SSE:
         url = str(toolset._mcp_config.url)
-        merged_headers = {
-            **(toolset._mcp_config.headers or {}),
-            **(additional_headers or {}),
-        }
         async with sse_client(
-            url, merged_headers, sse_read_timeout=SSE_READ_TIMEOUT
+            url, toolset._mcp_config.headers, sse_read_timeout=SSE_READ_TIMEOUT
         ) as (
             read_stream,
             write_stream,
@@ -100,12 +94,8 @@ async def get_initialized_mcp_session(
                 yield session
     else:
         url = str(toolset._mcp_config.url)
-        merged_headers = {
-            **(toolset._mcp_config.headers or {}),
-            **(additional_headers or {}),
-        }
         async with streamablehttp_client(
-            url, headers=merged_headers, sse_read_timeout=SSE_READ_TIMEOUT
+            url, headers=toolset._mcp_config.headers, sse_read_timeout=SSE_READ_TIMEOUT
         ) as (
             read_stream,
             write_stream,
@@ -132,7 +122,7 @@ class RemoteMCPTool(Tool):
             params_with_context = self._inject_tool_context(params, context)
 
             with lock:
-                return asyncio.run(self._invoke_async(params_with_context, additional_headers=None))
+                return asyncio.run(self._invoke_async(params_with_context))
         except Exception as e:
             return StructuredToolResult(
                 status=StructuredToolResultStatus.ERROR,
@@ -178,12 +168,8 @@ class RemoteMCPTool(Tool):
         except Exception:
             return False
 
-    async def _invoke_async(
-        self, params: Dict, additional_headers: Optional[Dict[str, str]] = None
-    ) -> StructuredToolResult:
-        async with get_initialized_mcp_session(
-            self.toolset, additional_headers
-        ) as session:
+    async def _invoke_async(self, params: Dict) -> StructuredToolResult:
+        async with get_initialized_mcp_session(self.toolset) as session:
             tool_result = await session.call_tool(self.name, params)
 
         merged_text = " ".join(c.text for c in tool_result.content if c.type == "text")
