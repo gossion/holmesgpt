@@ -97,6 +97,7 @@ class Config(RobustaBaseConfig):
     mcp_servers: Optional[dict[str, dict[str, Any]]] = None
 
     _server_tool_executor: Optional[ToolExecutor] = None
+    _tool_executor_cache_timestamp: Optional[float] = None
     _agui_tool_executor: Optional[ToolExecutor] = None
 
     # TODO: Separate those fields to facade class, this shouldn't be part of the config.
@@ -276,15 +277,45 @@ class Config(RobustaBaseConfig):
 
     def create_tool_executor(self, dal: Optional["SupabaseDal"]) -> ToolExecutor:
         """
-        Creates ToolExecutor for the server endpoints
+        Creates ToolExecutor for the server endpoints with configurable TTL cache.
+
+        The cache TTL is controlled by TOOLSET_CACHE_TTL_SECONDS environment variable:
+        - Set to 0 for development (no cache, always reload MCP server tools)
+        - Set to 60-300 for production (balance performance vs freshness)
         """
+        import time
+        from holmes.common.env_vars import TOOLSET_CACHE_TTL_SECONDS
 
-        if self._server_tool_executor:
-            return self._server_tool_executor
+        now = time.time()
 
+        # Check if cache exists and is still valid
+        if (
+            self._server_tool_executor
+            and self._tool_executor_cache_timestamp is not None
+        ):
+            cache_age = now - self._tool_executor_cache_timestamp
+
+            if cache_age < TOOLSET_CACHE_TTL_SECONDS:
+                logging.debug(
+                    f"Reusing cached ToolExecutor (age: {cache_age:.1f}s, "
+                    f"TTL: {TOOLSET_CACHE_TTL_SECONDS}s)"
+                )
+                return self._server_tool_executor
+            else:
+                logging.info(
+                    f"ToolExecutor cache expired (age: {cache_age:.1f}s, "
+                    f"TTL: {TOOLSET_CACHE_TTL_SECONDS}s), reloading toolsets"
+                )
+
+        # Load fresh toolsets (will reconnect to MCP servers and fetch latest tools)
         toolsets = self.toolset_manager.list_server_toolsets(dal=dal)
-
         self._server_tool_executor = ToolExecutor(toolsets)
+        self._tool_executor_cache_timestamp = now
+
+        logging.info(
+            f"Created new ToolExecutor with {len(self._server_tool_executor.tools_by_name)} tools "
+            f"(cache TTL: {TOOLSET_CACHE_TTL_SECONDS}s)"
+        )
 
         logging.debug(
             f"Starting AI session with tools: {[tn for tn in self._server_tool_executor.tools_by_name.keys()]}"
@@ -295,6 +326,12 @@ class Config(RobustaBaseConfig):
     def refresh_server_tool_executor(
         self, dal: Optional["SupabaseDal"]
     ) -> list[tuple[str, str, str]]:
+        """
+        Refreshes toolsets and updates ToolExecutor if there are changes.
+        This is called by the background refresh thread.
+        """
+        import time
+
         if not self._server_tool_executor:
             self.create_tool_executor(dal)
             return []
@@ -307,7 +344,13 @@ class Config(RobustaBaseConfig):
         )
 
         if changes:
+            # Update executor and timestamp when toolset status changes
             self._server_tool_executor = ToolExecutor(new_toolsets)
+            self._tool_executor_cache_timestamp = time.time()
+            logging.info(
+                f"Background refresh updated ToolExecutor due to status changes: "
+                f"{[(name, old.value, new.value) for name, old, new in changes]}"
+            )
 
         return [(name, old.value, new.value) for name, old, new in changes]
 

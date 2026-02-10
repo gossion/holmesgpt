@@ -152,3 +152,11 @@ ROBUSTA_UI_DOMAIN = os.environ.get(
 TOOLSET_STATUS_REFRESH_INTERVAL_SECONDS = int(
     os.environ.get("TOOLSET_STATUS_REFRESH_INTERVAL_SECONDS", 300)
 )
+
+# ToolExecutor cache TTL in seconds (controls how often MCP server tools are refreshed per API request)
+# - Set to 0 for development (no cache, immediate updates when MCP server changes)
+# - Set to 60-300 for production (balance performance vs freshness)
+# Default is 60 seconds
+TOOLSET_CACHE_TTL_SECONDS = int(
+    os.environ.get("TOOLSET_CACHE_TTL_SECONDS", 60)
+)
